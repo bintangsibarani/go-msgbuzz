@@ -201,6 +201,13 @@ func (m *RabbitMqClient) Close() error {
 		return fmt.Errorf("trying to close closed connection")
 	}
 	if m.conn != nil {
+		ch, _ := m.conn.Channel()
+		if ch != nil {
+			err := ch.Close()
+			if err != nil {
+				return err
+			}
+		}
 		return m.conn.Close()
 	}
 	return nil
