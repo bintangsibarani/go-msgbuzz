@@ -17,7 +17,6 @@ type RabbitMqClient struct {
 	conn               *amqp.Connection
 	url                string
 	consumerWg         sync.WaitGroup
-	consumerDone       chan bool
 	consumerDoneSignal chan bool
 	subscribers        []subscriber
 	threadNum          int
@@ -99,7 +98,6 @@ func NewRabbitMqClient(connStr string, opt ...RabbitOption) (*RabbitMqClient, er
 		return nil, errPool
 	}
 	mc.pubChannelPool = pool
-	mc.consumerDone = make(chan bool)
 	mc.consumerDoneSignal = make(chan bool)
 	return mc, nil
 }
@@ -200,11 +198,8 @@ func (m *RabbitMqClient) Close() error {
 	}
 
 	m.isClosed.Store(true)
-	fmt.Println("MASUK1")
 	close(m.consumerDoneSignal)
-	fmt.Println("MASUK2")
-	<-m.consumerDone
-	fmt.Println("MASUK3")
+	m.consumerWg.Wait()
 	if m.pubChannelPool != nil {
 		m.pubChannelPool.Close()
 	}
@@ -218,6 +213,7 @@ func (m *RabbitMqClient) Close() error {
 }
 
 func (m *RabbitMqClient) StartConsuming() error {
+
 	for !m.isClosed.Load() {
 	subLoop:
 		for _, sub := range m.subscribers {
@@ -230,10 +226,9 @@ func (m *RabbitMqClient) StartConsuming() error {
 				m.logger.Debugf("[rbconsumer] Registering handlers #%d for %s (%s) success", i+1, sub.topicName, sub.consumerName)
 			}
 		}
-		fmt.Println("START CONSUMING")
+
 		m.consumerWg.Wait() // wait until all consumers are closed (due to conn.close, cancel, etc)
 
-		m.consumerDone <- true
 		time.Sleep(1 * time.Second)
 	}
 
@@ -384,6 +379,7 @@ loop:
 	for {
 		select {
 		case d := <-deliveries:
+
 			if messageExpired(d) {
 
 				err := channel.Nack(d.DeliveryTag, false, false)
@@ -399,7 +395,7 @@ loop:
 
 			}
 		case <-consumerDoneSignal:
-			fmt.Println("BREAK LOOP DONE SIGNAL")
+
 			break loop
 		}
 	}

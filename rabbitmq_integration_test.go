@@ -14,7 +14,6 @@ import (
 )
 
 func TestRabbitMqClient_Publish(t *testing.T) {
-	t.Skip()
 	t.Run("ShouldPublishMessageToTopic", func(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
@@ -55,7 +54,7 @@ func TestRabbitMqClient_Publish(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
 		require.NoError(t, errClient)
-
+		rabbitClient.isClosed.Store(false)
 		testTopicName := "msgbuzz.pubtest.routing"
 		actualMsgReceivedChan := make(chan []byte)
 		routingKey := "routing_key"
@@ -108,18 +107,24 @@ func TestRabbitMqClient_Publish(t *testing.T) {
 			nil,
 		)
 		require.NoError(t, err)
+		// -- wait for exchange and queue to be created
+		time.Sleep(3 * time.Second)
+
+		rabbitClient.consumerWg.Add(1)
 
 		// -- listen topic to check published message
 		go func() {
-			for msg := range msgs {
-				actualMsgReceivedChan <- msg.Body
+			defer rabbitClient.consumerWg.Done()
+		loop:
+			for {
+				select {
+				case d := <-msgs:
+					actualMsgReceivedChan <- d.Body
+				case <-rabbitClient.consumerDoneSignal:
+					break loop
+				}
 			}
 		}()
-
-		defer rabbitClient.Close()
-
-		// -- wait for exchange and queue to be created
-		time.Sleep(3 * time.Second)
 
 		// Code under test
 		sentMessage := []byte("some msg from msgbuzz with routing keys")
