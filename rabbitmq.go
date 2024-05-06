@@ -23,6 +23,8 @@ type RabbitMqClient struct {
 	logger         Logger
 	isClosed       atomic.Bool
 	connMutex      sync.Mutex
+	done           chan bool
+	signaldone     chan bool
 }
 
 type RabbitConfig struct {
@@ -97,7 +99,8 @@ func NewRabbitMqClient(connStr string, opt ...RabbitOption) (*RabbitMqClient, er
 		return nil, errPool
 	}
 	mc.pubChannelPool = pool
-
+	mc.done = make(chan bool, 1)
+	mc.signaldone = make(chan bool, len(mc.subscribers)*mc.threadNum)
 	return mc, nil
 }
 
@@ -192,7 +195,17 @@ func (m *RabbitMqClient) On(topicName string, consumerName string, handlerFunc M
 
 func (m *RabbitMqClient) Close() error {
 
+	if m.isClosed.Load() {
+		return nil
+	}
+
 	m.isClosed.Store(true)
+
+	for i := 0; i < (len(m.subscribers) * m.threadNum); i++ {
+		m.signaldone <- true
+	}
+
+	<-m.done
 
 	if m.pubChannelPool != nil {
 		m.pubChannelPool.Close()
@@ -201,13 +214,6 @@ func (m *RabbitMqClient) Close() error {
 		return fmt.Errorf("trying to close closed connection")
 	}
 	if m.conn != nil {
-		ch, _ := m.conn.Channel()
-		if ch != nil {
-			err := ch.Close()
-			if err != nil {
-				return err
-			}
-		}
 		return m.conn.Close()
 	}
 	return nil
@@ -227,6 +233,7 @@ func (m *RabbitMqClient) StartConsuming() error {
 			}
 		}
 		m.consumerWg.Wait() // wait until all consumers are closed (due to conn.close, cancel, etc)
+		m.done <- true
 		time.Sleep(1 * time.Second)
 	}
 
@@ -310,7 +317,7 @@ func (m *RabbitMqClient) consume(topicName string, consumerName string, handlerF
 	}
 
 	m.consumerWg.Add(1)
-	go consumeLoop(&m.consumerWg, ch, deliveries, handlerFunc, names)
+	go consumeLoop(&m.consumerWg, ch, deliveries, handlerFunc, names, m.signaldone)
 	return nil
 }
 
@@ -370,24 +377,32 @@ func (m *RabbitMqClient) connectToBroker() error {
 	return nil
 }
 
-func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan amqp.Delivery, handlerFunc MessageHandler, names *QueueNameGenerator) {
+func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan amqp.Delivery, handlerFunc MessageHandler, names *QueueNameGenerator, signaldone chan bool) {
 	defer wg.Done()
-	for d := range deliveries {
-		if messageExpired(d) {
 
-			err := channel.Nack(d.DeliveryTag, false, false)
+loop:
+	for {
+		select {
+		case d := <-deliveries:
+			if messageExpired(d) {
+
+				err := channel.Nack(d.DeliveryTag, false, false)
+				if err != nil {
+
+				}
+				continue
+			}
+
+			msgConfirm := NewRabbitMqMessageConfirm(channel, &d, names, d.Body)
+			err := handlerFunc(msgConfirm, d.Body)
 			if err != nil {
 
 			}
-			continue
-		}
-
-		msgConfirm := NewRabbitMqMessageConfirm(channel, &d, names, d.Body)
-		err := handlerFunc(msgConfirm, d.Body)
-		if err != nil {
-
+		case <-signaldone:
+			break loop
 		}
 	}
+
 }
 
 func messageExpired(delivery amqp.Delivery) bool {
