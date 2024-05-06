@@ -21,7 +21,7 @@ test-integration: test-infra-up test-integration-no-infra test-infra-down
 
 test-infra-up: test-infra-down
 	@echo ">> Starting Rabbit MQ"
-	@docker run --name go-msgbuzz-test-rabbitmq -p 56723:5672 -d --rm rabbitmq:3
+	@docker run --name go-msgbuzz-test-rabbitmq -p 56723:5672 -p 15672:15672 -d --rm rabbitmq:3-management
 	@docker exec go-msgbuzz-test-rabbitmq sh -c 'sleep 5; rabbitmqctl wait /var/lib/rabbitmq/mnesia/rabbit@$$(hostname).pid'
 
 test-infra-down:

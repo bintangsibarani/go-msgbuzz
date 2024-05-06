@@ -412,6 +412,11 @@ func messageExpired(delivery amqp.Delivery) bool {
 }
 
 func getTotalFailed(delivery amqp.Delivery) (int64, error) {
+
+	if val, ok := delivery.Headers["x-retry-count"].(int64); ok {
+		return val, nil
+	}
+
 	deathHeader, ok := delivery.Headers["x-death"]
 	if !ok {
 

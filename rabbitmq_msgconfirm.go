@@ -44,12 +44,19 @@ func (m *RabbitMqMessageConfirm) Retry(delay int64, maxRetry int) error {
 	if prevHeaders == nil {
 		prevHeaders = amqp.Table{}
 	}
+	retryCount, ok := prevHeaders["x-retry-count"].(int64)
+	if !ok {
+		retryCount = 0
+	}
+
 	prevHeaders["x-max-retries"] = strconv.Itoa(maxRetry)
-	err = m.channel.Publish("", m.nameGenerator.RetryQueue(), false, false, amqp.Publishing{
+	prevHeaders["x-retry-count"] = retryCount + 1
+	payload := amqp.Publishing{
 		Headers:    prevHeaders,
 		Expiration: strconv.FormatInt(delay, 10),
 		Body:       m.body,
-	})
+	}
+	err = m.channel.Publish("", m.nameGenerator.RetryQueue(), false, false, payload)
 	if err != nil {
 		return err
 	}
