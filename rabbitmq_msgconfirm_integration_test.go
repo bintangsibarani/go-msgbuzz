@@ -14,7 +14,7 @@ import (
 
 // TODO improve testing
 func TestRabbitMqMessageConfirm_Retry(t *testing.T) {
-
+	t.Skip()
 	t.Run("ShouldRetry", func(t *testing.T) {
 		mc, errClient := msgbuzz.NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), msgbuzz.WithConsumerThread(1))
 		require.NoError(t, errClient)

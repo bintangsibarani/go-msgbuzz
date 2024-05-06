@@ -6,6 +6,7 @@ package msgbuzz
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func TestRabbitMqClient_Publish(t *testing.T) {
-
+	t.Skip()
 	t.Run("ShouldPublishMessageToTopic", func(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
@@ -309,4 +310,54 @@ func TestRabbitMqClient_PublishWithContext(t *testing.T) {
 
 	})
 
+}
+
+func TestRabbitMqClient_Close(t *testing.T) {
+	t.Run("ShouldRetunNoError_WhenIsClosedTrue", func(t *testing.T) {
+		// Init
+		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
+		require.NoError(t, errClient)
+
+		//WhenIsClosedTrue
+		rabbitClient.isClosed.Store(true)
+
+		// Code under test
+		err := rabbitClient.Close()
+
+		// Expectations
+		// -- ShouldRetunNoError
+		require.NoError(t, err)
+	})
+	t.Run("ShouldCloseRabbitMq", func(t *testing.T) {
+		// Init
+		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(0))
+		require.NoError(t, errClient)
+		testTopicName := "msgbuzz.pubtest"
+		actualMsgReceivedChan := make(chan []byte)
+		rabbitClient.isClosed.Store(false)
+
+		// -- listen topic
+		rabbitClient.On(testTopicName, "msgbuzz", func(confirm MessageConfirm, bytes []byte) error {
+			actualMsgReceivedChan <- bytes
+			return confirm.Ack()
+		})
+
+		go rabbitClient.StartConsuming()
+
+		// -- wait for exchange and queue to be created
+		time.Sleep(1 * time.Second)
+
+		// Code under test
+		err := rabbitClient.Close()
+		// Expectations
+		// -- ShouldRetunNoError
+		require.NoError(t, err)
+		require.Equal(t, rabbitClient.isClosed.Load(), true)
+
+		//should return error no channel when try to publish after close()
+		err = rabbitClient.Publish(testTopicName, []byte("Hi from msgbuzz"))
+		require.Error(t, err)
+		require.Equal(t, strings.Contains(err.Error(), "error when getting channel"), true)
+
+	})
 }

@@ -14,17 +14,17 @@ import (
 
 // RabbitMqClient RabbitMq implementation of MessageBus
 type RabbitMqClient struct {
-	conn           *amqp.Connection
-	url            string
-	consumerWg     sync.WaitGroup
-	subscribers    []subscriber
-	threadNum      int
-	pubChannelPool *RabbitMqChannelPool
-	logger         Logger
-	isClosed       atomic.Bool
-	connMutex      sync.Mutex
-	done           chan bool
-	signaldone     chan bool
+	conn               *amqp.Connection
+	url                string
+	consumerWg         sync.WaitGroup
+	consumerDone       chan bool
+	consumerDoneSignal chan bool
+	subscribers        []subscriber
+	threadNum          int
+	pubChannelPool     *RabbitMqChannelPool
+	logger             Logger
+	isClosed           atomic.Bool
+	connMutex          sync.Mutex
 }
 
 type RabbitConfig struct {
@@ -99,8 +99,8 @@ func NewRabbitMqClient(connStr string, opt ...RabbitOption) (*RabbitMqClient, er
 		return nil, errPool
 	}
 	mc.pubChannelPool = pool
-	mc.done = make(chan bool, 1)
-	mc.signaldone = make(chan bool, len(mc.subscribers)*mc.threadNum)
+	mc.consumerDone = make(chan bool)
+	mc.consumerDoneSignal = make(chan bool)
 	return mc, nil
 }
 
@@ -200,13 +200,11 @@ func (m *RabbitMqClient) Close() error {
 	}
 
 	m.isClosed.Store(true)
-
-	for i := 0; i < (len(m.subscribers) * m.threadNum); i++ {
-		m.signaldone <- true
-	}
-
-	<-m.done
-
+	fmt.Println("MASUK1")
+	close(m.consumerDoneSignal)
+	fmt.Println("MASUK2")
+	<-m.consumerDone
+	fmt.Println("MASUK3")
 	if m.pubChannelPool != nil {
 		m.pubChannelPool.Close()
 	}
@@ -232,8 +230,10 @@ func (m *RabbitMqClient) StartConsuming() error {
 				m.logger.Debugf("[rbconsumer] Registering handlers #%d for %s (%s) success", i+1, sub.topicName, sub.consumerName)
 			}
 		}
+		fmt.Println("START CONSUMING")
 		m.consumerWg.Wait() // wait until all consumers are closed (due to conn.close, cancel, etc)
-		m.done <- true
+
+		m.consumerDone <- true
 		time.Sleep(1 * time.Second)
 	}
 
@@ -317,7 +317,7 @@ func (m *RabbitMqClient) consume(topicName string, consumerName string, handlerF
 	}
 
 	m.consumerWg.Add(1)
-	go consumeLoop(&m.consumerWg, ch, deliveries, handlerFunc, names, m.signaldone)
+	go consumeLoop(&m.consumerWg, ch, deliveries, handlerFunc, names, m.consumerDoneSignal)
 	return nil
 }
 
@@ -377,7 +377,7 @@ func (m *RabbitMqClient) connectToBroker() error {
 	return nil
 }
 
-func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan amqp.Delivery, handlerFunc MessageHandler, names *QueueNameGenerator, signaldone chan bool) {
+func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan amqp.Delivery, handlerFunc MessageHandler, names *QueueNameGenerator, consumerDoneSignal chan bool) {
 	defer wg.Done()
 
 loop:
@@ -398,7 +398,8 @@ loop:
 			if err != nil {
 
 			}
-		case <-signaldone:
+		case <-consumerDoneSignal:
+			fmt.Println("BREAK LOOP DONE SIGNAL")
 			break loop
 		}
 	}
