@@ -379,6 +379,9 @@ loop:
 	for {
 		select {
 		case d := <-deliveries:
+			if channel != nil && channel.IsClosed() {
+				break loop
+			}
 
 			if messageExpired(d) {
 
@@ -395,7 +398,6 @@ loop:
 
 			}
 		case <-consumerDoneSignal:
-
 			break loop
 		}
 	}
