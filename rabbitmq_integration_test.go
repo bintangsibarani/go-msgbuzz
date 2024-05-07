@@ -13,7 +13,6 @@ import (
 )
 
 func TestRabbitMqClient_Publish(t *testing.T) {
-	t.Skip()
 	t.Run("ShouldPublishMessageToTopic", func(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
