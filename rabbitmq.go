@@ -378,8 +378,8 @@ func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan am
 loop:
 	for {
 		select {
-		case d := <-deliveries:
-			if channel != nil && channel.IsClosed() {
+		case d, ok := <-deliveries:
+			if !ok {
 				break loop
 			}
 
