@@ -6,7 +6,6 @@ package msgbuzz
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 )
 
 func TestRabbitMqClient_Publish(t *testing.T) {
+
 	t.Run("ShouldPublishMessageToTopic", func(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
@@ -54,7 +54,7 @@ func TestRabbitMqClient_Publish(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
 		require.NoError(t, errClient)
-		rabbitClient.isClosed.Store(false)
+
 		testTopicName := "msgbuzz.pubtest.routing"
 		actualMsgReceivedChan := make(chan []byte)
 		routingKey := "routing_key"
@@ -107,24 +107,18 @@ func TestRabbitMqClient_Publish(t *testing.T) {
 			nil,
 		)
 		require.NoError(t, err)
-		// -- wait for exchange and queue to be created
-		time.Sleep(3 * time.Second)
-
-		rabbitClient.consumerWg.Add(1)
 
 		// -- listen topic to check published message
 		go func() {
-			defer rabbitClient.consumerWg.Done()
-		loop:
-			for {
-				select {
-				case d := <-msgs:
-					actualMsgReceivedChan <- d.Body
-				case <-rabbitClient.consumerDoneSignal:
-					break loop
-				}
+			for msg := range msgs {
+				actualMsgReceivedChan <- msg.Body
 			}
 		}()
+
+		defer rabbitClient.Close()
+
+		// -- wait for exchange and queue to be created
+		time.Sleep(3 * time.Second)
 
 		// Code under test
 		sentMessage := []byte("some msg from msgbuzz with routing keys")
@@ -318,51 +312,81 @@ func TestRabbitMqClient_PublishWithContext(t *testing.T) {
 }
 
 func TestRabbitMqClient_Close(t *testing.T) {
-	t.Run("ShouldRetunNoError_WhenIsClosedTrue", func(t *testing.T) {
+	t.Run("ShouldRetunNoError_WhenCloseRabbitMq", func(t *testing.T) {
 		// Init
 		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
 		require.NoError(t, errClient)
 
-		//WhenIsClosedTrue
-		rabbitClient.isClosed.Store(true)
-
 		// Code under test
 		err := rabbitClient.Close()
-
 		// Expectations
 		// -- ShouldRetunNoError
 		require.NoError(t, err)
+
+		// Code under test
+		err = rabbitClient.Close()
+
+		// -- ShouldRetunNoError when call Close again
+		require.NoError(t, err)
+		require.Equal(t, rabbitClient.isClosed.Load(), true)
 	})
-	t.Run("ShouldCloseRabbitMq", func(t *testing.T) {
+
+	t.Run("ShouldCloseRabbitMqUntilConsumerFinish", func(t *testing.T) {
 		// Init
-		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(0))
+		rabbitClient, errClient := NewRabbitMqClient(os.Getenv("RABBITMQ_URL"), WithConsumerThread(1))
 		require.NoError(t, errClient)
+
 		testTopicName := "msgbuzz.pubtest"
 		actualMsgReceivedChan := make(chan []byte)
-		rabbitClient.isClosed.Store(false)
+		var consumerFinish string
 
 		// -- listen topic
 		rabbitClient.On(testTopicName, "msgbuzz", func(confirm MessageConfirm, bytes []byte) error {
+			defer func() {
+				require.NoError(t, confirm.Ack())
+			}()
+
+			// wait consumer finish
+			time.Sleep(2 * time.Second)
+
 			actualMsgReceivedChan <- bytes
-			return confirm.Ack()
+			consumerFinish = "consumer_finish"
+
+			// publish random topic
+			err := rabbitClient.Publish("msgbuzz.pubtest-random", []byte("Hi from msgbuzz"))
+			// -- ShouldRetunNoError
+			require.NoError(t, err)
+
+			return nil
 		})
 
 		go rabbitClient.StartConsuming()
-
 		// -- wait for exchange and queue to be created
 		time.Sleep(1 * time.Second)
 
+		//publish topic
+		sentMessage := []byte("some msg from msgbuzz")
+		err := rabbitClient.Publish(testTopicName, sentMessage)
+		require.NoError(t, err)
+
+		// -- Should receive correct msg
+		waitSec := 20
+		select {
+		case <-time.After(time.Duration(waitSec) * time.Second):
+			t.Fatalf("Not receiving msg after %d seconds", waitSec)
+		case actualMessageReceived := <-actualMsgReceivedChan:
+			require.Equal(t, sentMessage, actualMessageReceived)
+		}
+
 		// Code under test
-		err := rabbitClient.Close()
+		err = rabbitClient.Close()
+
 		// Expectations
 		// -- ShouldRetunNoError
 		require.NoError(t, err)
 		require.Equal(t, rabbitClient.isClosed.Load(), true)
 
-		//should return error no channel when try to publish after close()
-		err = rabbitClient.Publish(testTopicName, []byte("Hi from msgbuzz"))
-		require.Error(t, err)
-		require.Equal(t, strings.Contains(err.Error(), "error when getting channel"), true)
-
+		// assert variable for consumer finish
+		require.Equal(t, "consumer_finish", consumerFinish)
 	})
 }

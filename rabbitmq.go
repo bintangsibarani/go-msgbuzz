@@ -213,7 +213,6 @@ func (m *RabbitMqClient) Close() error {
 }
 
 func (m *RabbitMqClient) StartConsuming() error {
-
 	for !m.isClosed.Load() {
 	subLoop:
 		for _, sub := range m.subscribers {
@@ -226,9 +225,7 @@ func (m *RabbitMqClient) StartConsuming() error {
 				m.logger.Debugf("[rbconsumer] Registering handlers #%d for %s (%s) success", i+1, sub.topicName, sub.consumerName)
 			}
 		}
-
 		m.consumerWg.Wait() // wait until all consumers are closed (due to conn.close, cancel, etc)
-
 		time.Sleep(1 * time.Second)
 	}
 
@@ -378,8 +375,8 @@ func consumeLoop(wg *sync.WaitGroup, channel *amqp.Channel, deliveries <-chan am
 loop:
 	for {
 		select {
-		case d := <-deliveries:
-			if channel != nil && channel.IsClosed() {
+		case d, ok := <-deliveries:
+			if !ok {
 				break loop
 			}
 
