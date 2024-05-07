@@ -70,31 +70,20 @@ func TestRabbitMqMessageConfirm_Retry(t *testing.T) {
 		doneChan := make(chan bool)
 
 		maxRetry := 2
-		expectedRetryCount := 2
-		expectedMaxAttempt := expectedRetryCount + 1 // retry + original msg
-		delaySecond := 1
+		expectedRetryCount := maxRetry
+		expectedMaxAttempt := 1 + expectedRetryCount // original msg + retry
+		delayMs := 1000
+		var errRetry error
 		var actualAttempt int
 		err := mc.On(topicName, consumerName, func(confirm msgbuzz.MessageConfirm, bytes []byte) error {
 			actualAttempt++
-			if shouldRetry := actualAttempt < expectedMaxAttempt; shouldRetry {
-				// CODE UNDER TEST
-				err := confirm.Retry(int64(delaySecond), maxRetry)
-				require.NoError(t, err)
-				return nil
-			}
+			t.Logf("Attempt: %d", actualAttempt)
 
-			// use defer so when following assertion fail will not block
-			defer func() {
-				confirm.Ack()
+			// Retry
+			errRetry = confirm.Retry(int64(delayMs), int(maxRetry))
+			if errRetry != nil {
 				doneChan <- true
-			}()
-			// last attempt
-			err := confirm.Retry(int64(delaySecond), int(maxRetry))
-			// -- WhenMaxRetryReached
-			require.Equal(t, expectedRetryCount, actualAttempt-1)
-			// -- ShouldReturnError
-			require.Error(t, err)
-			require.Equal(t, "max retry reached", err.Error())
+			}
 
 			return nil
 		})
@@ -113,9 +102,16 @@ func TestRabbitMqMessageConfirm_Retry(t *testing.T) {
 		case <-time.After(time.Duration(waitSec) * time.Second):
 			t.Fatalf("Timeout after %d seconds", waitSec)
 		case <-doneChan:
-			// Should retry n times
-			require.Equal(t, expectedMaxAttempt, actualAttempt)
 		}
+
+		// -- WhenMaxRetryReached
+		// -- Should execute 1 + max retries
+		require.Equal(t, expectedMaxAttempt, actualAttempt)
+		// -- Should retry n times
+		require.Equal(t, expectedRetryCount, actualAttempt-1)
+		// -- ShouldReturnError on max retry + 1
+		require.Error(t, errRetry)
+		require.Equal(t, "max retry reached", errRetry.Error())
 	})
 
 }
